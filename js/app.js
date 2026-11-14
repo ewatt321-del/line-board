@@ -109,10 +109,14 @@ function modelPick(an, rows) {
     ? `xG ${g.xgHome.toFixed(2)}–${g.xgAway.toFixed(2)} · H ${pctPlain(g.pHome, 0)} D ${pctPlain(g.pDraw, 0)} A ${pctPlain(g.pAway, 0)}`
     : `proj ${an.home.split(' ').slice(-1)[0]} ${g.margin >= 0 ? '−' : '+'}${Math.abs(g.margin).toFixed(1)}, total ${g.total.toFixed(1)}`;
   const low = g.low ? ' · small sample' : '';
+  const earlyCbb = an.sport === 'basketball_ncaab' && new Date(an.commence) < new Date(new Date(an.commence).getFullYear(), 11, 15);
+  if (earlyCbb || g.low) return { text: `Model: ${head} — too few games this season to trust a pick yet`, cls: '' };
   if (!best || best.d < 0.03) return { text: `Model: ${head} — no strong lean vs market${low}`, cls: '' };
   const r = best.r;
   const sel = selLabel({ ...r, point: r.fairPoint });
-  return { text: `Model pick: ${sel} (${mkLabel(r.mk)}) — model ${pctPlain(best.pm, 0)} vs market ${pctPlain(r.fairP, 0)} · ${head}${low}`, cls: 'violet' };
+  // A huge gap with the market is far more likely a model miss (injury, rotation, bad data) than a market miss.
+  if (best.d > 0.12) return { text: `Model disagrees hard on ${sel} (${mkLabel(r.mk)}): model ${pctPlain(best.pm, 0)} vs market ${pctPlain(r.fairP, 0)}. Assume the model is missing something unless you know why. · ${head}`, cls: 'amber' };
+  return { text: `Model pick: ${sel} (${mkLabel(r.mk)}) — model ${pctPlain(best.pm, 0)} vs market ${pctPlain(r.fairP, 0)} · ${head}`, cls: 'violet' };
 }
 
 // ---------------- news / weather / schedule flags ----------------

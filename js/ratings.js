@@ -12,12 +12,17 @@ export async function loadRatings() {
 export const ratingsMeta = () => R;
 
 const norm = (s) => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase()
-  .replace(/&/g, ' and ').replace(/[’'.]/g, '').replace(/\b(fc|afc)\b/g, ' ').replace(/\s+/g, ' ').trim();
+  .replace(/&/g, ' and ').replace(/[’'.]/g, '').replace(/[-()]/g, ' ').replace(/\b(fc|afc)\b/g, ' ')
+  .replace(/\bst\b/g, 'state').replace(/\s+/g, ' ').trim();
 
 const ALIASES = {
   'los angeles clippers': 'la clippers',
   'uconn': 'connecticut', 'appalachian state': 'app state', 'massachusetts': 'umass', 'louisiana monroe': 'ul monroe',
   'southern mississippi': 'southern miss', 'sam houston state': 'sam houston', 'hawaii rainbow warriors': 'hawaii',
+  // Odds API -> ESPN college basketball names
+  'miss valley state': 'mississippi valley state', 'cal baptist': 'california baptist', 'loyola chi': 'loyola chicago',
+  'loyola md': 'loyola maryland', 'n colorado': 'northern colorado', 'ut arlington': 'ut arlington', 'arkansas little rock': 'little rock',
+  'seattle redhawks': 'seattle u redhawks',
 };
 
 const indexCache = new Map();
