@@ -91,7 +91,7 @@ function modelOnRow(r) {
   const pt = r.point ?? r.fairPoint;
   const pm = modelProb(g, r.sport, r.home, r.mk, r.name, pt);
   if (pm == null || r.p == null) return pm == null ? null : { pm, diff: null, low: g.low };
-  return { pm, diff: pm - r.p, low: g.low, stale: g.stale };
+  return { pm, diff: pm - r.p, low: g.low, nMin: g.nMin, stale: g.stale };
 }
 function modelPick(an, rows) {
   const g = modelFor(an);
@@ -109,14 +109,12 @@ function modelPick(an, rows) {
     ? `xG ${g.xgHome.toFixed(2)}–${g.xgAway.toFixed(2)} · H ${pctPlain(g.pHome, 0)} D ${pctPlain(g.pDraw, 0)} A ${pctPlain(g.pAway, 0)}`
     : `proj ${an.home.split(' ').slice(-1)[0]} ${g.margin >= 0 ? '−' : '+'}${Math.abs(g.margin).toFixed(1)}, total ${g.total.toFixed(1)}`;
   const low = g.low ? ' · small sample' : '';
-  const earlyCbb = an.sport === 'basketball_ncaab' && new Date(an.commence) < new Date(new Date(an.commence).getFullYear(), 11, 15);
-  if (earlyCbb || g.low) return { text: `Model: ${head} — too few games this season to trust a pick yet`, cls: '' };
+  if (g.nMin < S.settings.modelPickMinGames) return { text: `Model: ${head} — a team has under ${S.settings.modelPickMinGames} games this season; no picks yet`, cls: '' };
   if (!best || best.d < 0.03) return { text: `Model: ${head} — no strong lean vs market${low}`, cls: '' };
   const r = best.r;
   const sel = selLabel({ ...r, point: r.fairPoint });
-  // A huge gap with the market is far more likely a model miss (injury, rotation, bad data) than a market miss.
-  if (best.d > 0.12) return { text: `Model disagrees hard on ${sel} (${mkLabel(r.mk)}): model ${pctPlain(best.pm, 0)} vs market ${pctPlain(r.fairP, 0)}. Assume the model is missing something unless you know why. · ${head}`, cls: 'amber' };
-  return { text: `Model pick: ${sel} (${mkLabel(r.mk)}) — model ${pctPlain(best.pm, 0)} vs market ${pctPlain(r.fairP, 0)} · ${head}`, cls: 'violet' };
+  if (best.d >= S.settings.modelPickPp / 100) return { text: `MODEL PICK: ${sel} (${mkLabel(r.mk)}) — model ${pctPlain(best.pm, 0)} vs market ${pctPlain(r.fairP, 0)} · ${head}`, cls: 'violet' };
+  return { text: `Model lean: ${sel} (${mkLabel(r.mk)}) — model ${pctPlain(best.pm, 0)} vs market ${pctPlain(r.fairP, 0)}, below the ${S.settings.modelPickPp}-pt pick line · ${head}`, cls: '' };
 }
 
 // ---------------- news / weather / schedule flags ----------------
@@ -223,6 +221,13 @@ function recompute() {
           r.size = sizeBet({ p: r.p, dec: r.effDec, bankroll: bank, kellyMult: s.kellyMult, maxBetPct: s.maxBetPct, dailyCapPct: s.dailyCapPct, stakedToday: today, minStake: s.minStake });
         }
         try { r.model = modelOnRow(r); } catch (e) { r.model = null; console.warn('model row error', e); }
+        r.modelPick = !!(r.model?.diff != null && r.model.diff >= s.modelPickPp / 100 && (r.model.nMin ?? 0) >= s.modelPickMinGames
+          && r.book && r.p != null && r.effDec && MAIN_MARKETS.has(r.mk));
+        if (r.modelPick) {
+          // Size on a 50/50 blend of model and market, with its own (smaller) per-bet cap.
+          const pb = (r.model.pm + r.p) / 2;
+          r.mSize = sizeBet({ p: pb, dec: r.effDec, bankroll: bank, kellyMult: s.kellyMult, maxBetPct: s.modelPickMaxPct, dailyCapPct: s.dailyCapPct, stakedToday: today, minStake: s.minStake });
+        }
         S.rows.push(r);
       }
     }
@@ -428,7 +433,7 @@ function renderTop() {
   ].join('');
 }
 
-const TABS = () => [['best', 'Best Bets'], ...SPORTS.filter((s) => S.settings.sports.includes(s.key)).map((s) => [s.key, s.short]),
+const TABS = () => [['best', 'Suggested Bets'], ...SPORTS.filter((s) => S.settings.sports.includes(s.key)).map((s) => [s.key, s.short]),
   ['parlays', 'Parlays'], ...(S.settings.showArbs ? [['arbs', 'Middles/Arbs']] : []), ['log', 'Bet Log'], ['results', 'Results'], ['settings', 'Settings']];
 function renderTabs() {
   $('#tabs').innerHTML = TABS().map(([k, l]) => `<button data-act="tab" data-k="${k}" class="${S.tab === k ? 'on' : ''}">${l}</button>`).join('');
@@ -481,23 +486,26 @@ function chipsFor(r, an) {
   return ch.join('');
 }
 
-function rowCard(r, { compact = false } = {}) {
+function rowCard(r, { compact = false, mode = 'price' } = {}) {
   const an = S.an[r.eventId];
-  const hot = r.ev != null && r.ev >= r.threshold && !r.flags.verify;
-  const sz = r.size;
+  const isModel = mode === 'model';
+  const hot = isModel || (r.ev != null && r.ev >= r.threshold && !r.flags.verify);
+  const sz = isModel ? r.mSize : r.size;
   const stakeTxt = sz ? (sz.stake > 0 ? `${money(sz.stake)}${sz.limitedBy ? ` <span class="muted small">(${sz.limitedBy})</span>` : ''}${sz.belowMin ? ' <span class="muted small">(below min)</span>' : ''}` : '$0') : '—';
   const fairAm = r.p != null ? fmtAm(decToAm(1 / r.p)) : '—';
   const fairLine = r.fairPoint != null && r.fairPoint !== r.point ? ` at ${r.fairPoint > 0 && !r.mk.includes('total') ? '+' : ''}${r.fairPoint}` : '';
   return `<div class="card ${hot ? 'hot' : ''} ${r.flags.verify ? 'warn' : ''} ${r.flags.bias ? 'bias' : ''}">
     <div class="row1"><span>${SPORT_BY_KEY[r.sport].short} · ${esc(matchup(r))}</span><span>${etTime(r.commence)} · ${until(r.commence)}</span></div>
-    <div class="row2"><span class="pick">${esc(mkLabel(r.mk))}: ${esc(selLabel(r))}</span>
-      <span class="ev ${r.ev == null ? 'muted' : r.ev >= 0 ? 'pos' : 'neg'}">${r.kind === 'bound' && r.ev != null ? '≥' : ''}${pct(r.ev)}</span></div>
+    <div class="row2"><span class="pick">${isModel ? '<span class="chip violet">MODEL PICK</span> ' : ''}${esc(mkLabel(r.mk))}: ${esc(selLabel(r))}</span>
+      ${isModel ? `<span class="ev pos" title="Model probability minus market fair probability">+${(r.model.diff * 100).toFixed(0)} pts</span>`
+        : `<span class="ev ${r.ev == null ? 'muted' : r.ev >= 0 ? 'pos' : 'neg'}">${r.kind === 'bound' && r.ev != null ? '≥' : ''}${pct(r.ev)}</span>`}</div>
+    ${isModel ? `<div class="row3">Model <b>${pctPlain(r.model.pm)}</b> vs market <b>${pctPlain(r.p)}</b> · EV if the market is right: <b class="${r.ev >= 0 ? 'pos' : 'neg'}">${pct(r.ev)}</b> · EV if the model is right: <b class="pos">${pct(r.model.pm * r.effDec - 1)}</b></div>` : ''}
     <div class="row3"><span>Best: <b class="price">${r.am != null ? fmtAm(r.am) : '—'}</b> @ ${r.book ? esc(bookName(r.book)) : '<span class="muted">none of your books</span>'}</span>
       <span class="muted">· Fair <span class="price">${r.kind === 'keyadj' ? fmtAm(decToAm(1 / r.p)) : fairAm}</span>${r.kind === 'keyadj' ? '' : esc(fairLine)} (${esc(r.fairSource || 'no fair price')})</span>
       <span>· Stake <b>${stakeTxt}</b></span></div>
     <div class="row3">${spark(sparkSeries(r), r.mk)} <span class="muted small">· ${esc(bookName(r.book || ''))} updated ${stamp(r.lastUpdate)} · pulled ${Math.round(r.ageMin)}m ago</span></div>
     <div class="chips">${chipsFor(r, an)}</div>
-    ${compact ? '' : `<div class="actions">${r.book && r.p != null && !r.started ? `<button class="primary" data-act="bet" data-id="${esc(r.id)}">I bet this</button>` : ''}
+    ${compact ? '' : `<div class="actions">${r.book && r.p != null && !r.started ? `<button class="primary" data-act="bet" data-src="${mode}" data-id="${esc(r.id)}">I bet this</button>` : ''}
       <button data-act="details" data-id="${esc(r.id)}">Details</button>
       <button data-act="news" data-id="${esc(r.eventId)}">${newsState(an).ok ? 'News ✓' : 'Mark news checked'}</button></div>`}
   </div>`;
@@ -513,6 +521,7 @@ function steamPanel(filterSport) {
 }
 
 function renderBest() {
+  const picks = S.rows.filter((r) => r.modelPick && !r.started).sort((a, b) => b.model.diff - a.model.diff);
   const cand = S.rows.filter((r) => r.book && r.ev != null && r.ev >= r.threshold && !r.started);
   const rows = cand.filter((r) => !r.weakFair && (!S.settings.requireRobust || r.robust)).sort((a, b) => b.ev - a.ev);
   const held = cand.length - rows.length;
@@ -520,10 +529,15 @@ function renderBest() {
   let h = steamPanel();
   if (!S.key) h += `<div class="note">Add your Odds API key in <a href="#" data-act="tab" data-k="settings">Settings</a>, then tap a refresh button. Nothing is fetched automatically.</div>`;
   else if (!anyData) h += `<div class="note">No odds loaded yet. Tap ↻ for a sport — each tap shows its credit cost.</div>`;
-  h += `<div class="note">Bets where one of your books pays more than the sharp market's no-vig price, after Kalshi fees. Thresholds: main ≥ ${pctPlain(S.settings.evMain)}, derivatives ≥ ${pctPlain(S.settings.evDeriv)}. Above ${pctPlain(S.settings.evVerify, 0)} on a main market = verify first. The model is shown as a second opinion and never adds a bet here.</div>`;
+  h += `<div class="section-title">Price edges (${rows.length}) — your book beats the market</div>`;
+  h += `<div class="note">Your book pays more than the sharp market's no-vig price, after Kalshi fees. Main markets ≥ ${pctPlain(S.settings.evMain)}, derivatives ≥ ${pctPlain(S.settings.evDeriv)}; above ${pctPlain(S.settings.evVerify, 0)} = verify first. This is the proven long-run edge.</div>`;
   if (held) h += `<div class="note">${held} more price(s) clear the threshold but were held back: the fair price came from fewer than ${S.settings.minConsensusBooks} independent books, or the edge disappears under another de-vig method. They're still visible in the sport tabs with a flag.</div>`;
   if (anyData && !rows.length) h += `<div class="note">No bets clear the thresholds right now. That's normal: most of the time the books are priced right. Refresh closer to game time or after news.</div>`;
   h += rows.map((r) => rowCard(r)).join('');
+  h += `<div class="section-title">Model picks (${picks.length}) — model beats the market by ${S.settings.modelPickPp}+ pts</div>`;
+  h += `<div class="note">The model's probability is at least ${S.settings.modelPickPp} points above the market's. Unproven: the model knows nothing about injuries or lineups, so check news first. Stakes use a 50/50 blend of model and market, capped at ${pctPlain(S.settings.modelPickMaxPct, 0)} of bankroll. Logged separately so Results can show whether these beat the close.</div>`;
+  if (anyData && !picks.length) h += `<div class="note">No model picks right now.</div>`;
+  h += picks.map((r) => rowCard(r, { mode: 'model' })).join('');
   $('#main').innerHTML = h;
 }
 
@@ -601,7 +615,7 @@ function betLine(b) {
   const res = b.result ? `<b class="${b.pnl > 0 ? 'pos' : b.pnl < 0 ? 'neg' : ''}">${b.result.toUpperCase()} ${money(b.pnl)}</b>` : '<span class="muted">open</span>';
   const close = b.close ? `${b.close.p != null ? fmtAm(decToAm(1 / b.close.p)) : 'n/a'} <span class="muted small">(${esc(b.close.kind)}${b.close.minsBefore != null ? `, ${b.close.minsBefore}m before start` : ''}, ${esc(b.close.source || '')})</span>` : '<span class="muted">not yet</span>';
   return `<div class="card"><div class="row1"><span>${SPORT_BY_KEY[b.sport]?.short || b.sport} · ${esc(b.away)} @ ${esc(b.home)}</span><span>${etTime(b.commence)}</span></div>
-    <div class="row2"><span class="pick">${esc(mkLabel(b.mk))}: ${esc(selLabel(b))}</span><span>${res}</span></div>
+    <div class="row2"><span class="pick">${b.source === 'model' ? '<span class="chip violet">MODEL</span> ' : ''}${esc(mkLabel(b.mk))}: ${esc(selLabel(b))}</span><span>${res}</span></div>
     <div class="row3">${fmtAm(b.am)} @ ${esc(bookName(b.book))} · stake ${money(b.stake)}${b.kalshi ? ` (${b.kalshi.contracts} contracts, fee ${money(b.kalshi.fee)})` : ''} · EV at bet ${pct(b.evAtBet)} · logged ${etTime(b.ts)}</div>
     <div class="row3">Close: ${close} · CLV <b class="${b.clv == null ? '' : b.clv >= 0 ? 'pos' : 'neg'}">${pct(b.clv, 2)}</b></div>
     <div class="actions">${['win', 'loss', 'push', 'void'].map((x) => `<button data-act="settle" data-id="${b.id}" data-r="${x}">${x}</button>`).join('')}
@@ -657,7 +671,7 @@ function renderResults() {
   h += `<div class="grid2"><div class="card">Bets <b>${n}</b> · settled ${settled.length}<br>Staked ${money(st)} · P/L <b class="${pnl >= 0 ? 'pos' : 'neg'}">${money(pnl)}</b> · ROI ${st ? pct(pnl / st) : '—'}</div>
     <div class="card">Avg CLV <b class="${clv.mean >= 0 ? 'pos' : 'neg'}">${pct(clv.mean, 2)}</b> over ${clv.n} bets with a close${clv.lo != null ? `<br><span class="muted small">95% range ${pct(clv.lo, 2)} to ${pct(clv.hi, 2)}</span>` : ''}</div></div>`;
   const evBucket = (b) => (b.evAtBet == null ? 'unknown' : b.evAtBet < 0.02 ? '<2%' : b.evAtBet < 0.04 ? '2–4%' : b.evAtBet < 0.08 ? '4–8%' : '8%+');
-  for (const t of [breakdown(bets, (b) => SPORT_BY_KEY[b.sport]?.short || b.sport, 'By sport'), breakdown(bets, (b) => mkLabel(b.mk), 'By market'),
+  for (const t of [breakdown(bets, (b) => (b.source === 'model' ? 'Model picks' : 'Price edges'), 'By source'), breakdown(bets, (b) => SPORT_BY_KEY[b.sport]?.short || b.sport, 'By sport'), breakdown(bets, (b) => mkLabel(b.mk), 'By market'),
     breakdown(bets, (b) => bookName(b.book), 'By book'), breakdown(bets, evBucket, 'By EV at bet')]) {
     h += `<div class="section-title">${t.label}</div><div class="scroll"><table class="tbl"><tr><th></th><th>Bets</th><th>Avg CLV</th><th>Beat close</th><th>ROI</th><th>P/L</th>${n >= 100 ? '<th>Verdict</th>' : ''}</tr>
       ${t.rows.map((r) => `<tr><td>${esc(r.k)}</td><td>${r.n}</td><td class="${r.clv.mean == null ? '' : r.clv.mean >= 0 ? 'pos' : 'neg'}">${pct(r.clv.mean, 2)}</td><td>${r.beat == null ? '—' : pctPlain(r.beat, 0)}</td>
@@ -693,7 +707,9 @@ function renderSettings() {
     ${field('evMain', 'Min EV, main markets', 'pct')}${field('evDeriv', 'Min EV, derivatives/props', 'pct')}${field('evVerify', '"Verify" warning above', 'pct')}
     ${field('staleMin', 'Stale after (minutes)', 'num')}${field('devig', 'De-vig method', ['power', 'shin', 'mult'])}
     ${field('steamPp', 'Steam alert: sharp move ≥ (pp)', 'num')}${field('minConsensusBooks', 'Min independent books for consensus fair', 'num')}
-    ${field('requireRobust', 'Best Bets: edge must hold under every de-vig method', 'bool')}${field('kalshiFeeMult', 'Kalshi taker fee multiplier', 'num')}</div>
+    ${field('requireRobust', 'Price edges: must hold under every de-vig method', 'bool')}
+    ${field('modelPickPp', 'Model pick: model beats market by (pts)', 'num')}${field('modelPickMaxPct', 'Model pick max stake', 'pct')}
+    ${field('modelPickMinGames', 'Model pick: min games per team this season', 'num')}${field('kalshiFeeMult', 'Kalshi taker fee multiplier', 'num')}</div>
   <div class="card"><b>Credits</b>
     ${field('autoRefresh', 'Auto-refresh (off saves credits)', 'bool')}${field('autoRefreshMin', 'Every (minutes, min 10)', 'num')}${field('autoDailyCredits', 'Auto-refresh daily credit cap', 'num')}
     ${field('closeWindowMin', 'Capture close within (min of start)', 'num')}${field('historicalCloses', 'Use historical closes (paid plan, 10 credits each)', 'bool')}
@@ -760,9 +776,9 @@ function detailsModal(r) {
     <div class="actions"><button data-act="close-modal">Close</button></div>`);
 }
 
-function betModal(r) {
+function betModal(r, src = 'price') {
   const s = S.settings;
-  const sz = r.size || { stake: 0 };
+  const sz = (src === 'model' ? r.mSize : r.size) || { stake: 0 };
   openModal(`<b>Log bet</b><div class="muted small">${esc(matchup(r))} · ${etTime(r.commence)}</div>
     <div class="row2"><span class="pick">${esc(mkLabel(r.mk))}: ${esc(r.desc ? r.desc + ' ' : '')}${esc(r.name)}</span></div>
     <div class="field"><span>Book</span><select id="b-book">${s.myBooks.map((b) => `<option value="${b}" ${b === r.book ? 'selected' : ''}>${esc(bookName(b))}</option>`).join('')}</select></div>
@@ -770,7 +786,7 @@ function betModal(r) {
     <div class="field"><span>Price you got (American)</span><input id="b-am" type="number" value="${r.am}"></div>
     <div class="field"><span>Stake ($)<small>Suggested ${money(sz.stake)}${sz.limitedBy ? ` (${sz.limitedBy})` : ''} · unit ${money(s.unit)}</small></span><input id="b-stake" type="number" step="0.01" value="${sz.stake || ''}"></div>
     <div id="b-calc" class="row3 muted"></div>
-    <div class="actions"><button class="primary" data-act="save-bet" data-id="${esc(r.id)}">Save bet</button><button data-act="close-modal">Cancel</button></div>`);
+    <div class="actions"><button class="primary" data-act="save-bet" data-src="${src}" data-id="${esc(r.id)}">Save bet</button><button data-act="close-modal">Cancel</button></div>`);
   updateBetCalc(r);
 }
 function updateBetCalc(r) {
@@ -788,7 +804,7 @@ function updateBetCalc(r) {
   const p = point != null && point !== r.point ? null : r.p;
   el.innerHTML = p != null ? `EV at this price: <b class="${p * effDec - 1 >= 0 ? 'pos' : 'neg'}">${pct(p * effDec - 1)}</b>${extra}` : `Line changed — EV recalculated at close only${extra}`;
 }
-async function saveBet(r) {
+async function saveBet(r, src = 'price') {
   const am = Number($('#b-am').value), stake = Number($('#b-stake').value), bk = $('#b-book').value;
   const point = $('#b-point') ? Number($('#b-point').value) : null;
   if (!am || (am > -100 && am < 100) || !(stake > 0)) { toast('Check the price and stake.'); return; }
@@ -799,7 +815,7 @@ async function saveBet(r) {
   const b = {
     id: `b${Date.now()}${Math.random().toString(36).slice(2, 6)}`, ts: Date.now(), sport: r.sport, eventId: r.eventId, home: r.home, away: r.away, commence: r.commence,
     mk: r.mk, name: r.name, desc: r.desc, point, book: bk, am, dec: amToDec(am), effDec, stake: kalshi ? kalshi.cost : stake, kalshi,
-    fairPAtBet: p, fairSource: r.fairSource, evAtBet: p != null ? p * effDec - 1 : null, modelAtBet: r.model?.pm ?? null,
+    fairPAtBet: p, fairSource: r.fairSource, evAtBet: p != null ? p * effDec - 1 : null, modelAtBet: r.model?.pm ?? null, source: src,
     close: null, clv: null, result: null, pnl: null,
   };
   S.bets.push(b); await db.put('bets', b);
@@ -848,8 +864,8 @@ document.addEventListener('click', async (e) => {
     case 'refresh': refresh([t.dataset.k]); break;
     case 'refresh-all': refresh(S.settings.sports); break;
     case 'details': { const r = rowById(t.dataset.id); if (r) detailsModal(r); break; }
-    case 'bet': { const r = rowById(t.dataset.id); if (r) betModal(r); break; }
-    case 'save-bet': { const r = rowById(t.dataset.id); if (r) saveBet(r); break; }
+    case 'bet': { const r = rowById(t.dataset.id); if (r) betModal(r, t.dataset.src || 'price'); break; }
+    case 'save-bet': { const r = rowById(t.dataset.id); if (r) saveBet(r, t.dataset.src || 'price'); break; }
     case 'close-modal': closeModal(); break;
     case 'news': S.news[t.dataset.id] = Date.now(); db.lsSet('lb.news', S.news); render(); break;
     case 'deriv': {

@@ -117,6 +117,9 @@ export const DEFAULT_SETTINGS = {
   autoDailyCredits: 15,
   showArbs: false,
   minConsensusBooks: 3,
+  modelPickPp: 17,
+  modelPickMaxPct: 0.01,
+  modelPickMinGames: 5,
   requireRobust: true,
   sports: SPORTS.map((s) => s.key),
 };
