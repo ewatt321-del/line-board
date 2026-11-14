@@ -504,6 +504,7 @@ function rowCard(r, { compact = false, mode = 'price' } = {}) {
       <span class="muted">· Fair <span class="price">${r.kind === 'keyadj' ? fmtAm(decToAm(1 / r.p)) : fairAm}</span>${r.kind === 'keyadj' ? '' : esc(fairLine)} (${esc(r.fairSource || 'no fair price')})</span>
       <span>· Stake <b>${stakeTxt}</b></span></div>
     <div class="row3">${spark(sparkSeries(r), r.mk)} <span class="muted small">· ${esc(bookName(r.book || ''))} updated ${stamp(r.lastUpdate)} · pulled ${Math.round(r.ageMin)}m ago</span></div>
+    ${isModel && r.alsoPicks?.length ? `<div class="row3 muted small">Model also likes: ${r.alsoPicks.map((x) => `${esc(mkLabel(x.mk))} ${esc(selLabel(x))} (+${(x.model.diff * 100).toFixed(0)})`).join(', ')} — same opinion, don't stack them.</div>` : ''}
     <div class="chips">${chipsFor(r, an)}</div>
     ${compact ? '' : `<div class="actions">${r.book && r.p != null && !r.started ? `<button class="primary" data-act="bet" data-src="${mode}" data-id="${esc(r.id)}">I bet this</button>` : ''}
       <button data-act="details" data-id="${esc(r.id)}">Details</button>
@@ -521,7 +522,11 @@ function steamPanel(filterSport) {
 }
 
 function renderBest() {
-  const picks = S.rows.filter((r) => r.modelPick && !r.started).sort((a, b) => b.model.diff - a.model.diff);
+  // One model pick per game: moneyline, spread and total on the same game are the same opinion, not three bets.
+  const allPicks = S.rows.filter((r) => r.modelPick && !r.started).sort((a, b) => b.model.diff - a.model.diff);
+  const byGame = new Map();
+  for (const r of allPicks) { if (!byGame.has(r.eventId)) byGame.set(r.eventId, { top: r, also: [] }); else byGame.get(r.eventId).also.push(r); }
+  const picks = [...byGame.values()].map((x) => Object.assign(x.top, { alsoPicks: x.also }));
   const cand = S.rows.filter((r) => r.book && r.ev != null && r.ev >= r.threshold && !r.started);
   const rows = cand.filter((r) => !r.weakFair && (!S.settings.requireRobust || r.robust)).sort((a, b) => b.ev - a.ev);
   const held = cand.length - rows.length;
@@ -535,7 +540,7 @@ function renderBest() {
   if (anyData && !rows.length) h += `<div class="note">No bets clear the thresholds right now. That's normal: most of the time the books are priced right. Refresh closer to game time or after news.</div>`;
   h += rows.map((r) => rowCard(r)).join('');
   h += `<div class="section-title">Model picks (${picks.length}) — model beats the market by ${S.settings.modelPickPp}+ pts</div>`;
-  h += `<div class="note">The model's probability is at least ${S.settings.modelPickPp} points above the market's. Unproven: the model knows nothing about injuries or lineups, so check news first. Stakes use a 50/50 blend of model and market, capped at ${pctPlain(S.settings.modelPickMaxPct, 0)} of bankroll. Logged separately so Results can show whether these beat the close.</div>`;
+  h += `<div class="note">The model's probability is at least ${S.settings.modelPickPp} points above the market's. Unproven: the model knows nothing about injuries or lineups, so check news first. Stakes use a 50/50 blend of model and market, capped at ${pctPlain(S.settings.modelPickMaxPct, 0)} of bankroll. One pick per game. Logged separately so Results can show whether these beat the close.</div>`;
   if (anyData && !picks.length) h += `<div class="note">No model picks right now.</div>`;
   h += picks.map((r) => rowCard(r, { mode: 'model' })).join('');
   $('#main').innerHTML = h;
