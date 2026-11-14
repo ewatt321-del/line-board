@@ -77,7 +77,11 @@ function openExposure() { return S.bets.filter((b) => !b.result).reduce((s, b) =
 
 // ---------------- model (second opinion) ----------------
 function modelFor(an) {
-  if (!S.models.has(an.id)) S.models.set(an.id, modelGame(an.sport, an.home, an.away));
+  if (!S.models.has(an.id)) {
+    let g = null;
+    try { g = modelGame(an.sport, an.home, an.away); } catch (e) { console.warn('model error', an.home, an.away, e); }
+    S.models.set(an.id, g);
+  }
   return S.models.get(an.id);
 }
 function modelOnRow(r) {
@@ -214,7 +218,7 @@ function recompute() {
         if (r.p != null && r.effDec) {
           r.size = sizeBet({ p: r.p, dec: r.effDec, bankroll: bank, kellyMult: s.kellyMult, maxBetPct: s.maxBetPct, dailyCapPct: s.dailyCapPct, stakedToday: today, minStake: s.minStake });
         }
-        r.model = modelOnRow(r);
+        try { r.model = modelOnRow(r); } catch (e) { r.model = null; console.warn('model row error', e); }
         S.rows.push(r);
       }
     }
@@ -708,6 +712,12 @@ function renderSettings() {
 }
 
 function render() {
+  try { renderInner(); } catch (e) {
+    console.error(e);
+    $('#main').innerHTML = `<div class="alert">Something broke while drawing this page: ${esc(e.message)}. Your bets and odds are saved. Try another tab or reload.</div>`;
+  }
+}
+function renderInner() {
   recompute();
   renderTop(); renderTabs(); renderControls();
   const t = S.tab;

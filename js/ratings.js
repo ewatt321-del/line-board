@@ -27,7 +27,7 @@ function indexFor(sport) {
   if (!m) return null;
   const idx = new Map();
   for (const t of Object.keys(m.teams)) idx.set(norm(t), t);
-  if (m.locations) for (const [t, loc] of Object.entries(m.locations)) if (loc && !idx.has(norm(loc))) idx.set(norm(loc), t);
+  if (m.locations) for (const [t, loc] of Object.entries(m.locations)) if (loc && m.teams[t] && !idx.has(norm(loc))) idx.set(norm(loc), t);
   indexCache.set(sport, idx);
   return idx;
 }
@@ -38,6 +38,9 @@ export function resolveTeam(sport, name) {
   let n = norm(name);
   if (idx.has(n)) return idx.get(n);
   for (const [k, v] of Object.entries(ALIASES)) if (n === k || n.startsWith(k + ' ')) { n = n.replace(k, v); if (idx.has(n)) return idx.get(n); }
+  // Prefix matching only for college football, where ratings use bare school names ("Ohio State").
+  // Elsewhere names match exactly, and a prefix match could pick the wrong school ("Texas ..." -> Texas).
+  if (sport !== 'americanfootball_ncaaf') return null;
   let best = null;
   for (const k of idx.keys()) if (k.length >= 3 && n.startsWith(k + ' ') && (!best || k.length > best.length)) best = k;
   return best ? idx.get(best) : null;
@@ -85,7 +88,7 @@ export function modelGame(sport, homeName, awayName) {
   const m = R?.sports?.[sport];
   if (!m) return null;
   const h = resolveTeam(sport, homeName), a = resolveTeam(sport, awayName);
-  if (!h || !a) return { missing: [!h && homeName, !a && awayName].filter(Boolean) };
+  if (!h || !a || !m.teams[h] || !m.teams[a]) return { missing: [(!h || !m.teams[h]) && homeName, (!a || !m.teams[a]) && awayName].filter(Boolean) };
   const nMin = Math.min(m.teams[h].n, m.teams[a].n);
   const low = nMin < (MIN_GAMES[sport] || 4);
   if (m.type === 'dixon-coles') {

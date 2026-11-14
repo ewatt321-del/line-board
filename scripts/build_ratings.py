@@ -251,7 +251,9 @@ def cbb():
     m = ridge_points(games, half_life_days=45, lam=2.5, min_sigma_m=10.5, min_sigma_t=14.0, min_team_games=12, hfa_prior=3.0)
     m['locations'] = {}
     for g in games:
-        m['locations'][g['home']] = g.get('hloc'); m['locations'][g['away']] = g.get('aloc')
+        for t, loc in ((g['home'], g.get('hloc')), (g['away'], g.get('aloc'))):
+            if t in m['teams']:
+                m['locations'][t] = loc
     m['source'] = 'ESPN scoreboard (Division I men)'
     return m
 
