@@ -1,0 +1,28 @@
+name: Update model ratings
+on:
+  schedule:
+    - cron: '17 10 * * *'   # daily, ~5am ET
+  workflow_dispatch: {}
+  push:
+    paths: ['scripts/build_ratings.py']
+permissions:
+  contents: write
+concurrency: ratings
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.12' }
+      - run: pip install numpy scipy
+      - run: python scripts/build_ratings.py
+      - name: Commit ratings
+        run: |
+          git config user.name "line-board-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/
+          git diff --cached --quiet || git commit -m "Update ratings $(date -u +%F)"
+          git pull --rebase --autostash || true
+          git push
