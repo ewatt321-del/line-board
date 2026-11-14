@@ -22,7 +22,8 @@ const ALIASES = {
   // Odds API -> ESPN college basketball names
   'miss valley state': 'mississippi valley state', 'cal baptist': 'california baptist', 'loyola chi': 'loyola chicago',
   'loyola md': 'loyola maryland', 'n colorado': 'northern colorado', 'ut arlington': 'ut arlington', 'arkansas little rock': 'little rock',
-  'seattle redhawks': 'seattle u redhawks',
+  'seattle redhawks': 'seattle u redhawks', 'gardner webb bulldogs': 'gardner webb runnin bulldogs',
+  'grand canyon antelopes': 'grand canyon lopes', 'nicholls state colonels': 'nicholls colonels', 'iupui jaguars': 'iu indy jaguars',
 };
 
 const indexCache = new Map();
