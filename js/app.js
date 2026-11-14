@@ -454,7 +454,9 @@ function chipsFor(r, an) {
   if (r.kind === 'bound') ch.push(`<span class="chip" title="Your line is better than the reference line; EV shown is a floor">EV is a floor (better line)</span>`);
   if (r.push != null && r.push > 0.02) ch.push(`<span class="chip">Push ${pctPlain(r.push)}</span>`);
   if (!r.sharp && r.fairSource) ch.push(`<span class="chip amber" title="${esc(r.fairMethod)}">No sharp book — consensus fair</span>`);
-  if (r.flags.kalshi) ch.push(`<span class="chip" title="Kalshi taker fee included in EV">Kalshi fee incl.</span>`);
+  if (r.flags.kalshi) ch.push(`<span class="chip" title="Kalshi taker fee included in EV. Confirm the live ask on Kalshi before buying.">Kalshi: fee incl. · confirm ask</span>`);
+  if (r.weakFair) ch.push(`<span class="chip amber">Weak fair price: under ${S.settings.minConsensusBooks} independent books</span>`);
+  if (r.evMin != null && !r.robust) ch.push(`<span class="chip amber" title="EV under power/Shin/multiplicative de-vig">Method-sensitive: EV ${pct(r.evMin)} to ${pct(r.evMax)}</span>`);
   if (r.flags.limited) ch.push(`<span class="chip amber">Limited book</span>`);
   if (!r.main) ch.push(`<span class="chip" title="Lower limits and noisier fair prices">Derivative market</span>`);
   const ns = newsState(an);
@@ -503,12 +505,15 @@ function steamPanel(filterSport) {
 }
 
 function renderBest() {
-  const rows = S.rows.filter((r) => r.book && r.ev != null && r.ev >= r.threshold && !r.started).sort((a, b) => b.ev - a.ev);
+  const cand = S.rows.filter((r) => r.book && r.ev != null && r.ev >= r.threshold && !r.started);
+  const rows = cand.filter((r) => !r.weakFair && (!S.settings.requireRobust || r.robust)).sort((a, b) => b.ev - a.ev);
+  const held = cand.length - rows.length;
   const anyData = Object.keys(S.data).length;
   let h = steamPanel();
   if (!S.key) h += `<div class="note">Add your Odds API key in <a href="#" data-act="tab" data-k="settings">Settings</a>, then tap a refresh button. Nothing is fetched automatically.</div>`;
   else if (!anyData) h += `<div class="note">No odds loaded yet. Tap ↻ for a sport — each tap shows its credit cost.</div>`;
   h += `<div class="note">Bets where one of your books pays more than the sharp market's no-vig price, after Kalshi fees. Thresholds: main ≥ ${pctPlain(S.settings.evMain)}, derivatives ≥ ${pctPlain(S.settings.evDeriv)}. Above ${pctPlain(S.settings.evVerify, 0)} on a main market = verify first. The model is shown as a second opinion and never adds a bet here.</div>`;
+  if (held) h += `<div class="note">${held} more price(s) clear the threshold but were held back: the fair price came from fewer than ${S.settings.minConsensusBooks} independent books, or the edge disappears under another de-vig method. They're still visible in the sport tabs with a flag.</div>`;
   if (anyData && !rows.length) h += `<div class="note">No bets clear the thresholds right now. That's normal: most of the time the books are priced right. Refresh closer to game time or after news.</div>`;
   h += rows.map((r) => rowCard(r)).join('');
   $('#main').innerHTML = h;
@@ -679,7 +684,8 @@ function renderSettings() {
   <div class="card"><b>Edges & data</b>
     ${field('evMain', 'Min EV, main markets', 'pct')}${field('evDeriv', 'Min EV, derivatives/props', 'pct')}${field('evVerify', '"Verify" warning above', 'pct')}
     ${field('staleMin', 'Stale after (minutes)', 'num')}${field('devig', 'De-vig method', ['power', 'shin', 'mult'])}
-    ${field('steamPp', 'Steam alert: sharp move ≥ (pp)', 'num')}${field('kalshiFeeMult', 'Kalshi taker fee multiplier', 'num')}</div>
+    ${field('steamPp', 'Steam alert: sharp move ≥ (pp)', 'num')}${field('minConsensusBooks', 'Min independent books for consensus fair', 'num')}
+    ${field('requireRobust', 'Best Bets: edge must hold under every de-vig method', 'bool')}${field('kalshiFeeMult', 'Kalshi taker fee multiplier', 'num')}</div>
   <div class="card"><b>Credits</b>
     ${field('autoRefresh', 'Auto-refresh (off saves credits)', 'bool')}${field('autoRefreshMin', 'Every (minutes, min 10)', 'num')}${field('autoDailyCredits', 'Auto-refresh daily credit cap', 'num')}
     ${field('closeWindowMin', 'Capture close within (min of start)', 'num')}${field('historicalCloses', 'Use historical closes (paid plan, 10 credits each)', 'bool')}

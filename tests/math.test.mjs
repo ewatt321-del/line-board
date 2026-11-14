@@ -165,3 +165,19 @@ test('ratings: name matching and model probabilities', () => {
   const ph = modelProb(n, 'americanfootball_nfl', 'Buffalo Bills', 'spreads', 'Buffalo Bills', -n.margin);
   close(ph, 0.5, 1e-3);
 });
+
+test('consensus counts identical feeds once; robustness across de-vig methods', () => {
+  const e = ev('americanfootball_nfl', {
+    betrivers: { h2h: [{ name: 'Home Team', price: -1115 }, { name: 'Away Team', price: 650 }] },
+    ballybet: { h2h: [{ name: 'Home Team', price: -1115 }, { name: 'Away Team', price: 650 }] },
+    draftkings: { h2h: [{ name: 'Home Team', price: -1000 }, { name: 'Away Team', price: 650 }] },
+    fanduel: { h2h: [{ name: 'Home Team', price: -1200 }, { name: 'Away Team', price: 750 }] },
+    kalshi: { h2h: [{ name: 'Home Team', price: -733 }, { name: 'Away Team', price: 614 }] },
+  });
+  const an = analyzeEvent(e, S);
+  const r = an.rows.find((x) => x.mk === 'h2h' && x.name === 'Home Team');
+  assert.match(r.fairSource, /3 independent/);
+  assert.equal(r.book, 'kalshi');
+  assert.ok(r.evMin < r.ev, 'multiplicative de-vig gives the heavy favourite less');
+  assert.equal(r.robust, false, 'heavy-favourite edge that depends on the de-vig method is not robust');
+});

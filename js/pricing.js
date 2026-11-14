@@ -40,17 +40,17 @@ function pairsOf(book, ev) {
 }
 
 // Fair probabilities for every line the reference has. Returns {source, method, pairs: Map(key -> {outcomes:[{...,p}], hold})}
-export function fairFor(sport, mk, books, ev, s) {
+export function fairFor(sport, mk, books, ev, s, method = s.devig) {
   const n = outcomeCount(sport, mk);
   for (const sb of s.sharpBooks) {
     if (!books[sb]) continue;
     const pairs = new Map();
     for (const [k, outs] of pairsOf(books[sb], ev)) {
       if (outs.length !== n) continue;
-      const d = devig(outs.map((o) => 1 / o.dec), s.devig);
+      const d = devig(outs.map((o) => 1 / o.dec), method);
       pairs.set(k, { key: k, hold: d.hold, method: d.method, outcomes: outs.map((o, i) => ({ ...o, p: d.p[i] })) });
     }
-    if (pairs.size) return { source: BOOK_NAMES[sb] || sb, sharp: true, method: `${s.devig} no-vig`, pairs, lastUpdate: books[sb].lastUpdate };
+    if (pairs.size) return { source: BOOK_NAMES[sb] || sb, sharp: true, method: `${method} no-vig`, nBooks: 1, pairs, lastUpdate: books[sb].lastUpdate };
   }
   // No sharp book: weighted no-vig consensus of the other books (Kalshi excluded).
   const acc = new Map();
@@ -58,9 +58,12 @@ export function fairFor(sport, mk, books, ev, s) {
     if (bk === 'kalshi' || s.sharpBooks.includes(bk)) continue;
     for (const [k, outs] of pairsOf(books[bk], ev)) {
       if (outs.length !== n) continue;
-      const d = devig(outs.map((o) => 1 / o.dec), s.devig);
+      const d = devig(outs.map((o) => 1 / o.dec), method);
       if (!acc.has(k)) acc.set(k, []);
-      acc.get(k).push({ p: d.p, hold: d.hold, outs, bk });
+      // Books on a shared feed post identical prices; count them once.
+      const sig = outs.map((o) => o.am).join(',');
+      if (acc.get(k).some((x) => x.sig === sig)) { acc.get(k).find((x) => x.sig === sig).bk += `+${bk}`; continue; }
+      acc.get(k).push({ p: d.p, hold: d.hold, outs, bk, sig });
     }
   }
   const pairs = new Map();
@@ -72,7 +75,7 @@ export function fairFor(sport, mk, books, ev, s) {
   }
   if (!pairs.size) return null;
   const nBooks = Math.max(...[...pairs.values()].map((x) => x.books.length));
-  return { source: `Consensus (${nBooks} books)`, sharp: false, method: `weighted ${s.devig} no-vig consensus`, pairs };
+  return { source: `Consensus (${nBooks} independent book${nBooks > 1 ? 's' : ''})`, sharp: false, nBooks, method: `weighted ${method} no-vig consensus`, pairs };
 }
 
 // Price one offered outcome against the fair reference.
@@ -119,6 +122,7 @@ export function analyzeEvent(ev, s) {
   const mine = s.myBooks.filter((b) => !(s.limited.includes(b) && s.limitedMode === 'exclude'));
   for (const [mk, books] of Object.entries(byMk)) {
     const fair = fairFor(sport, mk, books, ev, s);
+    const alts = ['power', 'shin', 'mult'].filter((m) => m !== s.devig).map((m) => fairFor(sport, mk, books, ev, s, m));
     const holds = {};
     for (const [bk, book] of Object.entries(books)) {
       const hs = [...pairsOf(book, ev).values()].filter((x) => x.length === outcomeCount(sport, mk)).map((x) => holdPct(x.map((o) => 1 / o.dec)));
@@ -159,6 +163,14 @@ export function analyzeEvent(ev, s) {
         ev: top?.ev ?? null, lastUpdate: top?.lastUpdate ?? null, cands,
       };
       row.threshold = main ? s.evMain : s.evDeriv;
+      // Same bet under the other de-vig methods: an edge that only exists under one method isn't trustworthy.
+      if (top && row.ev != null) {
+        const evs = [row.ev];
+        for (const f of alts) { const pr = priceOutcome(top.o, f, sport, mk, ev); if (pr?.p != null) evs.push(pr.p * top.o.effDec - 1); }
+        row.evMin = Math.min(...evs); row.evMax = Math.max(...evs);
+      }
+      row.robust = row.evMin == null || row.evMin >= row.threshold;
+      row.weakFair = !!fair && !fair.sharp && (fair.nBooks || 0) < (s.minConsensusBooks ?? 3);
       row.flags = {
         verify: main && row.ev != null && row.ev > s.evVerify,
         bias: BIAS_TEAMS.some((t) => t === ev.home_team || t === ev.away_team),

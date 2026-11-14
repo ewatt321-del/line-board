@@ -116,5 +116,7 @@ export const DEFAULT_SETTINGS = {
   autoRefreshMin: 30,
   autoDailyCredits: 15,
   showArbs: false,
+  minConsensusBooks: 3,
+  requireRobust: true,
   sports: SPORTS.map((s) => s.key),
 };
