@@ -43,8 +43,19 @@ def daterange(a, b):
 
 
 # ---------------- ridge points model ----------------
-def ridge_points(games, half_life_days, lam, min_sigma_m, min_sigma_t):
+def gw(g, half_life_days):
+    base = g.get('w', 1.0)
+    if base < 1.0:  # last season: flat down-weight, no extra decay
+        return base
+    return 0.5 ** ((TODAY - g['date']).days / half_life_days)
+
+def ridge_points(games, half_life_days, lam, min_sigma_m, min_sigma_t, min_team_games=3, hfa_prior=2.0, hfa_strength=200.0):
     """games: list of dict(home, away, hs, as_, date: date, neutral: bool, w: base weight)"""
+    # Drop games against teams that barely appear (non-Division I opponents, exhibitions):
+    # they are blowouts with no rating information and drag home-field advantage way off.
+    from collections import Counter
+    seen = Counter([g['home'] for g in games] + [g['away'] for g in games])
+    games = [g for g in games if seen[g['home']] >= min_team_games and seen[g['away']] >= min_team_games]
     teams = sorted({g['home'] for g in games} | {g['away'] for g in games})
     idx = {t: i for i, t in enumerate(teams)}
     n = len(teams)
@@ -52,8 +63,7 @@ def ridge_points(games, half_life_days, lam, min_sigma_m, min_sigma_t):
     P = 2 + 2 * n
     rows, ys, ws = [], [], []
     for g in games:
-        age = (TODAY - g['date']).days
-        w = g.get('w', 1.0) * 0.5 ** (age / half_life_days)
+        w = gw(g, half_life_days)
         h, a = idx[g['home']], idx[g['away']]
         r = np.zeros(P); r[0] = 1; r[1] = 0 if g['neutral'] else 1; r[2 + h] = 1; r[2 + n + a] = -1
         rows.append(r); ys.append(g['hs']); ws.append(w)
@@ -63,7 +73,9 @@ def ridge_points(games, half_life_days, lam, min_sigma_m, min_sigma_t):
     sw = np.sqrt(W)
     Xw = X * sw[:, None]; yw = y * sw
     reg = np.zeros(P); reg[2:] = math.sqrt(lam)
-    Xa = np.vstack([Xw, np.diag(reg)]); ya = np.concatenate([yw, np.zeros(P)])
+    # Prior on home-field advantage (points added to the home side), worth ~hfa_strength games.
+    prior_row = np.zeros(P); prior_row[1] = math.sqrt(hfa_strength)
+    Xa = np.vstack([Xw, np.diag(reg), prior_row]); ya = np.concatenate([yw, np.zeros(P), [math.sqrt(hfa_strength) * hfa_prior]])
     beta, *_ = np.linalg.lstsq(Xa, ya, rcond=None)
     mu, hfa = beta[0], beta[1]
     off = beta[2:2 + n]; de = beta[2 + n:]
@@ -74,7 +86,7 @@ def ridge_points(games, half_life_days, lam, min_sigma_m, min_sigma_t):
         hf = 0 if g['neutral'] else hfa
         ph = mu + hf + off[h] - de[a]; pa = mu + off[a] - de[h]
         em.append((g['hs'] - g['as_']) - (ph - pa)); et.append((g['hs'] + g['as_']) - (ph + pa))
-        ww.append(g.get('w', 1.0) * 0.5 ** ((TODAY - g['date']).days / half_life_days))
+        ww.append(gw(g, half_life_days))
     ww = np.array(ww)
     sm = math.sqrt(float(np.sum(ww * np.square(em)) / np.sum(ww))) * 1.05
     st = math.sqrt(float(np.sum(ww * np.square(et)) / np.sum(ww))) * 1.05
@@ -158,7 +170,7 @@ def nfl():
         games.append({'home': NFL_ABBR[r['home_team']], 'away': NFL_ABBR[r['away_team']], 'hs': int(r['home_score']), 'as_': int(r['away_score']),
                       'date': dt.date.fromisoformat(r['gameday']), 'neutral': r['location'] == 'Neutral',
                       'w': 1.0 if int(r['season']) == cur else 0.35})
-    m = ridge_points(games, half_life_days=150, lam=6.0, min_sigma_m=13.5, min_sigma_t=13.0)
+    m = ridge_points(games, half_life_days=150, lam=6.0, min_sigma_m=13.5, min_sigma_t=13.0, hfa_prior=1.5)
     m['source'] = 'nflverse/nfldata games.csv'
     return m
 
@@ -176,7 +188,7 @@ def cfb():
             games.append({'home': r['home_team'], 'away': r['away_team'], 'hs': int(float(r['home_points'])), 'as_': int(float(r['away_points'])),
                           'date': dt.date.fromisoformat(r['start_date'][:10]), 'neutral': r['neutral_site'] in ('TRUE', 'True', 'true'),
                           'w': 1.0 if season == cur else 0.3})
-    m = ridge_points(games, half_life_days=120, lam=4.0, min_sigma_m=14.0, min_sigma_t=14.0)
+    m = ridge_points(games, half_life_days=120, lam=4.0, min_sigma_m=14.0, min_sigma_t=14.0, hfa_prior=3.0)
     m['source'] = 'sportsdataverse/cfbfastR-data schedules'
     return m
 
@@ -226,7 +238,7 @@ def nba():
     prev = espn_games('basketball/nba', dt.date(2025, 10, 21), dt.date(2026, 4, 12), 'nba.json')
     cur = espn_games('basketball/nba', cur_start, TODAY, 'nba.json')
     games = [{**g, 'w': 0.4} for g in prev if g['date'] < cur_start] + [{**g, 'w': 1.0} for g in cur]
-    m = ridge_points(games, half_life_days=60, lam=8.0, min_sigma_m=11.0, min_sigma_t=16.0)
+    m = ridge_points(games, half_life_days=60, lam=8.0, min_sigma_m=11.0, min_sigma_t=16.0, min_team_games=20, hfa_prior=2.0)
     m['source'] = 'ESPN scoreboard (NBA)'
     return m
 
@@ -236,7 +248,7 @@ def cbb():
     prev = espn_games('basketball/mens-college-basketball', dt.date(2025, 11, 3), dt.date(2026, 3, 15), 'cbb.json', '&groups=50&limit=500')
     cur = espn_games('basketball/mens-college-basketball', cur_start, TODAY, 'cbb.json', '&groups=50&limit=500')
     games = [{**g, 'w': 0.3} for g in prev if g['date'] < cur_start] + [{**g, 'w': 1.0} for g in cur]
-    m = ridge_points(games, half_life_days=45, lam=3.0, min_sigma_m=10.5, min_sigma_t=14.0)
+    m = ridge_points(games, half_life_days=45, lam=2.5, min_sigma_m=10.5, min_sigma_t=14.0, min_team_games=12, hfa_prior=3.0)
     m['locations'] = {}
     for g in games:
         m['locations'][g['home']] = g.get('hloc'); m['locations'][g['away']] = g.get('aloc')
